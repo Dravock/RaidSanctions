@@ -1,0 +1,112 @@
+name: Code Quality Check
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    name: Lua Syntax Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup Lua
+      uses: leafo/gh-actions-lua@v10
+      with:
+        luaVersion: "5.1"
+        
+    - name: Install luacheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y luarocks
+        sudo luarocks install luacheck
+        
+    - name: Run luacheck
+      run: |
+        luacheck . --exclude-files ui.lua --no-unused-args --no-max-line-length || true
+        
+    - name: Syntax Check
+      run: |
+        for file in *.lua modules/*.lua; do
+          echo "Checking $file"
+          luac -p "$file" || exit 1
+        done
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Check README
+      run: |
+        if [ ! -f README.md ]; then
+          echo "README.md not found"
+          exit 1
+        fi
+        
+    - name: Check LICENSE
+      run: |
+        if [ ! -f LICENSE ]; then
+          echo "LICENSE not found"
+          exit 1
+        fi
+        
+    - name: Check CHANGELOG
+      run: |
+        if [ ! -f CHANGELOG.md ]; then
+          echo "CHANGELOG.md not found"
+          exit 1
+        fi
+
+  structure:
+    name: Project Structure Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Validate TOC file
+      run: |
+        if [ ! -f RaidSanctions.toc ]; then
+          echo "RaidSanctions.toc not found"
+          exit 1
+        fi
+        echo "TOC file found"
+        
+    - name: Check module structure
+      run: |
+        required_files=(
+          "RaidSanctions.lua"
+          "logic.lua"
+          "modules/ui_core.lua"
+          "modules/ui_playerlist.lua"
+          "modules/ui_actions.lua"
+          "modules/ui_sync.lua"
+        )
+        
+        for file in "${required_files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "Required file missing: $file"
+            exit 1
+          fi
+          echo "✓ $file"
+        done
+        
+    - name: Check for common issues
+      run: |
+        # Check for TODO/FIXME comments
+        echo "Checking for TODO/FIXME comments..."
+        grep -r "TODO\|FIXME" *.lua modules/*.lua || echo "No TODO/FIXME found"
+        
+        # Check file encodings
+        echo "Checking file encodings..."
+        file -i *.lua modules/*.lua

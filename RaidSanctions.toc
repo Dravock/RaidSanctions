@@ -1,11 +1,26 @@
 ## Interface: 110107
 ## Title: Raid Sanctions
-## Notes: Management of raid sanctions with persistent data storage
+## Notes: Professional raid penalty management with real-time sync and persistent storage
 ## Author: Drodar
-## Version: 1.1
+## Version: 1.2
 ## SavedVariables: RaidSanctionsDB
 ## SavedVariablesPerCharacter: RaidSanctionsCharDB
+## X-Category: Raid
+## X-Website: https://github.com/Dravock/RaidSanctions
+## X-License: MIT
+## X-Embeds: None
 
+# Core Logic Layer
 logic.lua
+
+# UI Modules (Modular Architecture)
+modules\ui_core.lua
+modules\ui_playerlist.lua
+modules\ui_actions.lua
+modules\ui_sync.lua
+
+# Legacy UI (backward compatibility - will be deprecated)
 ui.lua
+
+# Main Initialization
 RaidSanctions.lua

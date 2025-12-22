@@ -1,32 +1,65 @@
--- Core Logic for RaidSanctions Addon
--- Handles business logic, events and data persistence
+--[[
+    RaidSanctions - Core Logic Module
+    
+    This module handles all business logic for the RaidSanctions addon, including:
+    - Database initialization and migration
+    - Session management
+    - Penalty application and removal
+    - Season statistics tracking
+    - Group/raid member detection
+    - Data persistence
+    
+    @author Drodar
+    @version 1.1
+    @since 2024
+]]
 
 local addonName, addonTable = ...
 
--- Create namespace
+-- ============================================================================
+-- NAMESPACE INITIALIZATION
+-- ============================================================================
+
+-- Initialize addon namespace to avoid global pollution
 RaidSanctions = RaidSanctions or {}
 RaidSanctions.Logic = {}
 
--- Local references for better performance
+-- ============================================================================
+-- LOCAL REFERENCES
+-- ============================================================================
+
+-- Cache frequently used functions for performance optimization
 local Logic = RaidSanctions.Logic
 local format = string.format
 local pairs, ipairs = pairs, ipairs
 local wipe = table.wipe or wipe
 
--- Constants
+-- ============================================================================
+-- CONSTANTS
+-- ============================================================================
+
+-- Addon version for database migration tracking
 local ADDON_VERSION = "1.1"
+
+-- Debug mode toggle (set to true to enable console logging)
 local DEBUG_MODE = false
 
--- Default penalties (can be configured)
+-- Default penalty amounts in copper (10000 copper = 1 gold)
+-- These values can be modified through the UI settings
 local DEFAULT_PENALTIES = {
-    ["Late"] = 10000,          -- 1g
-    ["AFK"] = 10000,           -- 1g
-    ["Wrong Gear"] = 10000,    -- 1g
-    ["Wrong Tactic"] = 10000,  -- 1g
-    ["Disruption"] = 10000     -- 1g
+    ["Late"] = 10000,          -- 1 gold - For arriving late to raid
+    ["AFK"] = 10000,           -- 1 gold - For going AFK without notice
+    ["Wrong Gear"] = 10000,    -- 1 gold - For wearing inappropriate gear
+    ["Wrong Tactic"] = 10000,  -- 1 gold - For not following raid tactics
+    ["Disruption"] = 10000     -- 1 gold - For disruptive behavior
 }
 
--- Localization
+-- ============================================================================
+-- LOCALIZATION
+-- ============================================================================
+
+-- Localization table for UI strings
+-- Currently supports English; can be extended for other languages
 local L = {
     ["LATE"] = "Late",
     ["AFK"] = "AFK", 
@@ -39,20 +72,32 @@ local L = {
     ["DATA_RESET"] = "All sanction data has been reset."
 }
 
--- Database functions
+-- ============================================================================
+-- DATABASE MANAGEMENT
+-- ============================================================================
+
+--[[
+    Initializes the addon database structures
+    
+    Creates two separate database tables:
+    - RaidSanctionsDB: Global settings shared across all characters
+    - RaidSanctionsCharDB: Character-specific session and season data
+    
+    @return void
+]]
 function Logic:InitializeDatabase()
-    -- Global database
+    -- Initialize global database with default settings
     RaidSanctionsDB = RaidSanctionsDB or {
         version = ADDON_VERSION,
         penalties = {},
         settings = {
-            showInCombat = false,
-            autoHide = true,
-            soundEnabled = true
+            showInCombat = false,  -- Whether to show UI during combat
+            autoHide = true,       -- Automatically hide UI when leaving group
+            soundEnabled = true    -- Play sound effects on penalty application
         }
     }
     
-    -- Initialize penalties if they don't exist
+    -- Initialize penalties if they don't exist or are empty
     if not RaidSanctionsDB.penalties or next(RaidSanctionsDB.penalties) == nil then
         RaidSanctionsDB.penalties = {}
         for reason, amount in pairs(DEFAULT_PENALTIES) do
@@ -60,43 +105,51 @@ function Logic:InitializeDatabase()
         end
     end
     
-    -- Character-specific database
+    -- Initialize character-specific database
     RaidSanctionsCharDB = RaidSanctionsCharDB or {
-        sessions = {},
-        currentSession = nil,
-        seasonData = {} -- Initialize season data
+        sessions = {},          -- Stores all raid sessions
+        currentSession = nil,   -- ID of the active session
+        seasonData = {}         -- Cumulative season statistics
     }
     
-    -- Initialize season data if it doesn't exist
+    -- Ensure season data table exists
     if not RaidSanctionsCharDB.seasonData then
         RaidSanctionsCharDB.seasonData = {}
     end
     
-    -- Version check and migration if needed
+    -- Perform database migration if version mismatch detected
     if RaidSanctionsDB.version ~= ADDON_VERSION then
         self:MigrateDatabase()
     end
 end
 
-function Logic:MigrateDatabase()
-    -- Data migration logic for future versions can be added here
+--[[
+    Handles database schema migrations between addon versions
     
-    -- Update penalties to English names if they are still in German
+    This function is called when the saved database version doesn't match
+    the current addon version. It handles backward compatibility and data
+    structure updates.
+    
+    @return void
+]]
+function Logic:MigrateDatabase()
+    -- Update penalties from German to English if necessary
     if RaidSanctionsDB.penalties then
-        -- Check for German penalty names and replace with English
+        -- Check for legacy German penalty names
         local oldPenalties = RaidSanctionsDB.penalties
         local hasGermanNames = false
         
-        -- Check if we have German names
+        -- Detect German penalty names
         for name, _ in pairs(oldPenalties) do
-            if name == "Zu spät" or name == "Falsche Taktik" or name == "Falsches Gear" or name == "Störung" then
+            if name == "Zu spät" or name == "Falsche Taktik" or 
+               name == "Falsches Gear" or name == "Störung" then
                 hasGermanNames = true
                 break
             end
         end
         
+        -- Replace German names with English defaults
         if hasGermanNames then
-            -- Replace with English penalties
             RaidSanctionsDB.penalties = DEFAULT_PENALTIES
             print("RaidSanctions: Updated penalty names to English")
         end
@@ -108,6 +161,18 @@ function Logic:MigrateDatabase()
     end
 end
 
+-- ============================================================================
+-- SESSION MANAGEMENT
+-- ============================================================================
+
+--[[
+    Creates a new raid session
+    
+    Sessions are used to track penalties within a single raid instance.
+    Each session has a unique timestamp-based ID and stores all player data.
+    
+    @return table The newly created session object
+]]
 function Logic:CreateNewSession()
     local sessionId = date("%Y%m%d_%H%M%S")
     local session = {
@@ -124,6 +189,11 @@ function Logic:CreateNewSession()
     return session
 end
 
+--[[
+    Retrieves the currently active session
+    
+    @return table|nil The current session object or nil if no active session
+]]
 function Logic:GetCurrentSession()
     local sessionId = RaidSanctionsCharDB.currentSession
     if sessionId and RaidSanctionsCharDB.sessions[sessionId] then
@@ -132,18 +202,33 @@ function Logic:GetCurrentSession()
     return nil
 end
 
+--[[
+    Updates the raid member list in the current session
+    
+    This function is called whenever the group roster changes. It detects
+    all members in the current group (raid or party) and adds them to the
+    active session if they're not already present.
+    
+    Supports:
+    - Full raid groups (up to 40 players)
+    - Party groups (up to 5 players)
+    - Automatic detection of player class, level, and rank
+    
+    @return void
+]]
 function Logic:UpdateRaidMembers()
-    -- Support for both Raid AND Party/Group
+    -- Only proceed if player is in a group
     if not (IsInRaid() or IsInGroup()) then
         return
     end
     
+    -- Get or create active session
     local session = self:GetCurrentSession()
     if not session then
         session = self:CreateNewSession()
     end
     
-    -- Get current group members (Raid or Party)
+    -- Iterate through all group members
     local numMembers = GetNumGroupMembers()
     for i = 1, numMembers do
         local name, rank, subgroup, level, class
@@ -187,6 +272,25 @@ function Logic:UpdateRaidMembers()
     end
 end
 
+-- ============================================================================
+-- PENALTY MANAGEMENT
+-- ============================================================================
+
+--[[
+    Applies a penalty to a specific player
+    
+    This is the core function for penalty tracking. It:
+    - Creates a unique penalty record
+    - Updates the player's total penalty amount
+    - Triggers season data update
+    - Provides user feedback
+    - Plays audio confirmation (if enabled)
+    
+    @param playerName string The name of the player to penalize
+    @param reason string The reason for the penalty (e.g., "Late", "AFK")
+    @param amount number The penalty amount in copper (10000 = 1 gold)
+    @return boolean True if penalty was successfully applied, false otherwise
+]]
 function Logic:ApplyPenalty(playerName, reason, amount)
     local session = self:GetCurrentSession()
     if not session or not session.players[playerName] then
@@ -196,10 +300,10 @@ function Logic:ApplyPenalty(playerName, reason, amount)
     local player = session.players[playerName]
     local timestamp = time()
     
-    -- Create unique ID for this penalty (combining timestamp with random component)
+    -- Generate unique ID to prevent duplicate processing
     local uniqueId = timestamp .. "_" .. math.random(1000, 9999)
     
-    -- Create penalty entry
+    -- Create penalty record
     local penaltyEntry = {
         reason = reason,
         amount = amount,
@@ -230,6 +334,18 @@ function Logic:ApplyPenalty(playerName, reason, amount)
     return true
 end
 
+--[[
+    Removes the most recent matching penalty from a player
+    
+    Searches backwards through the player's penalty list to find and remove
+    the most recent penalty that matches the specified reason and amount.
+    This allows users to undo mistakes.
+    
+    @param playerName string The player whose penalty should be removed
+    @param reason string The penalty reason to match
+    @param amount number The penalty amount to match
+    @return boolean True if a penalty was found and removed, false otherwise
+]]
 function Logic:RemovePenalty(playerName, reason, amount)
     local session = self:GetCurrentSession()
     if not session or not session.players[playerName] then
@@ -238,7 +354,7 @@ function Logic:RemovePenalty(playerName, reason, amount)
     
     local player = session.players[playerName]
     
-    -- Find and remove the most recent penalty of this type
+    -- Search backwards (most recent first)
     for i = #player.penalties, 1, -1 do
         local penalty = player.penalties[i]
         if penalty.reason == reason and penalty.amount == amount then
@@ -265,6 +381,16 @@ function Logic:RemovePenalty(playerName, reason, amount)
     return false
 end
 
+-- ============================================================================
+-- UTILITY FUNCTIONS
+-- ============================================================================
+
+--[[
+    Gets the total penalty amount for a specific player
+    
+    @param playerName string The player name to query
+    @return number The total penalty amount in copper (0 if player not found)
+]]
 function Logic:GetPlayerTotal(playerName)
     local session = self:GetCurrentSession()
     if session and session.players[playerName] then
@@ -273,6 +399,14 @@ function Logic:GetPlayerTotal(playerName)
     return 0
 end
 
+--[[
+    Resets all session data
+    
+    Clears all player data from the current session while preserving
+    season statistics. This is typically used at the end of a raid night.
+    
+    @return void
+]]
 function Logic:ResetSessionData()
     -- Add current session data to season data before resetting
     self:UpdateSeasonData()
@@ -283,6 +417,16 @@ function Logic:ResetSessionData()
     print(L["DATA_RESET"])
 end
 
+--[[
+    Resets all penalties for a specific player
+    
+    Marks a player as "paid" by clearing their penalty history while
+    preserving their entry in the session. Commonly used after a player
+    has paid their accumulated fines.
+    
+    @param playerName string The player whose penalties should be reset
+    @return boolean True if reset successful, false otherwise
+]]
 function Logic:ResetPlayerPenalties(playerName)
     if not playerName then
         return false
@@ -301,6 +445,16 @@ function Logic:ResetPlayerPenalties(playerName)
     return true
 end
 
+--[[
+    Manually adds a player to the current session
+    
+    Allows raid leaders to add players who aren't currently in the group,
+    useful for applying penalties to players who have already left or for
+    pre-raid penalty setup.
+    
+    @param playerName string The name of the player to add
+    @return boolean True if player was added, false if already exists or invalid name
+]]
 function Logic:AddPlayerManually(playerName)
     if not playerName or playerName:trim() == "" then
         return false
@@ -331,12 +485,23 @@ function Logic:AddPlayerManually(playerName)
     return true
 end
 
+--[[
+    Formats a copper amount into a human-readable gold string
+    
+    Converts raw copper values into formatted gold strings with appropriate
+    suffixes for large amounts:
+    - Values >= 1,000,000g: "1500k Gold"
+    - Values >= 1,000g: "1.5k Gold"
+    - Values < 1,000g: "500 Gold"
+    
+    @param amount number The amount in copper (10000 copper = 1 gold)
+    @return string Formatted gold string
+]]
 function Logic:FormatGold(amount)
     local gold = math.floor(amount / 10000)
     
-    -- Format large amounts with k suffix
+    -- Handle millions of gold
     if gold >= 1000000 then
-        -- Millions: 1500000g -> 1500k Gold
         local millions = math.floor(gold / 1000)
         return millions .. "k Gold"
     elseif gold >= 1000 then
@@ -357,10 +522,24 @@ function Logic:FormatGold(amount)
     end
 end
 
+--[[
+    Retrieves the current penalty configuration
+    
+    @return table Penalty configuration mapping reasons to amounts
+]]
 function Logic:GetPenalties()
     return RaidSanctionsDB.penalties
 end
 
+--[[
+    Updates penalty configuration with custom values
+    
+    Validates and applies custom penalty amounts. All values must be
+    non-negative numbers with string keys.
+    
+    @param newPenalties table Map of penalty reasons to amounts
+    @return boolean True if update successful, false if validation failed
+]]
 function Logic:SetCustomPenalties(newPenalties)
     -- Validate and set custom penalties
     if type(newPenalties) ~= "table" then
@@ -377,6 +556,14 @@ function Logic:SetCustomPenalties(newPenalties)
     return true
 end
 
+--[[
+    Resets all penalties to their default values
+    
+    Discards any custom penalty configuration and restores the original
+    default penalty amounts.
+    
+    @return void
+]]
 function Logic:ResetPenaltiesToDefault()
     RaidSanctionsDB.penalties = {}
     for reason, amount in pairs(DEFAULT_PENALTIES) do
@@ -384,34 +571,75 @@ function Logic:ResetPenaltiesToDefault()
     end
 end
 
+--[[
+    Forces penalty names to English (migration helper)
+    
+    Legacy function to update older installations that used German
+    penalty names. Should not be needed for new installations.
+    
+    @deprecated Migration tool for legacy versions
+    @return void
+]]
 function Logic:UpdatePenaltiesToEnglish()
     -- Force update penalties to English names
     RaidSanctionsDB.penalties = DEFAULT_PENALTIES
     print("RaidSanctions: Penalty names updated to English. Please reload the UI (/rs show).")
 end
 
+--[[
+    Sets a single penalty amount
+    
+    @param reason string The penalty reason/category
+    @param amount number The penalty amount in copper
+    @return void
+]]
 function Logic:SetPenalty(reason, amount)
     RaidSanctionsDB.penalties[reason] = amount
 end
 
+--[[
+    Retrieves the addon settings
+    
+    @return table Settings table with showInCombat, autoHide, soundEnabled
+]]
 function Logic:GetSettings()
     return RaidSanctionsDB.settings
 end
 
+--[[
+    Outputs debug information to console
+    
+    Only produces output when DEBUG_MODE is enabled at the top of this file.
+    
+    @param message string The debug message to output
+    @return void
+]]
 function Logic:Debug(message)
     if DEBUG_MODE then
         print("[RaidSanctions Debug]: " .. tostring(message))
     end
 end
 
--- Season Stats Functionality
+-- ============================================================================
+-- SEASON STATISTICS MANAGEMENT
+-- ============================================================================
+
+--[[
+    Retrieves and initializes season data
+    
+    Season data accumulates penalties across multiple raid sessions,
+    providing long-term statistics. This function also handles migration
+    of older data formats to include penalty deduplication tracking.
+    
+    @return table Season data indexed by player name
+]]
 function Logic:GetSeasonData()
-    -- Initialize season data if it doesn't exist
+    -- Initialize if needed
     if not RaidSanctionsCharDB.seasonData then
         RaidSanctionsCharDB.seasonData = {}
     end
     
-    -- Migrate existing season data to add processedSessionPenalties field
+    -- Migrate legacy data to add penalty tracking
     for playerName, playerData in pairs(RaidSanctionsCharDB.seasonData) do
         if not playerData.processedSessionPenalties then
             playerData.processedSessionPenalties = {}
@@ -428,6 +656,15 @@ function Logic:GetSeasonData()
     return RaidSanctionsCharDB.seasonData
 end
 
+--[[
+    Updates season data with current session penalties
+    
+    Incrementally adds new penalties from the active session to the cumulative
+    season statistics. Uses unique penalty IDs to prevent duplicate processing.
+    Automatically called after each penalty application/removal.
+    
+    @return void
+]]
 function Logic:UpdateSeasonData()
     -- Get current session data
     local session = self:GetCurrentSession()
@@ -489,11 +726,28 @@ function Logic:UpdateSeasonData()
     end
 end
 
+--[[
+    Clears all season statistics
+    
+    Permanently deletes all accumulated season data. This is typically
+    used at the end of a raid tier or season.
+    
+    @return void
+]]
 function Logic:ClearSeasonData()
     RaidSanctionsCharDB.seasonData = {}
     print("Season data has been cleared.")
 end
 
+--[[
+    Retrieves season players categorized by guild membership
+    
+    Separates season statistics into two lists: guild members and
+    random/non-guild players. Both lists are sorted by total penalty
+    amount in descending order.
+    
+    @return table, table Two arrays: guildPlayers and randomPlayers
+]]
 function Logic:GetSeasonPlayersByCategory()
     local seasonData = self:GetSeasonData()
     local guildPlayers = {}
@@ -525,6 +779,15 @@ function Logic:GetSeasonPlayersByCategory()
     return guildPlayers, randomPlayers
 end
 
+--[[
+    Checks if a player is in the same guild as the current player
+    
+    Searches the guild roster for the specified player name. Handles
+    cross-realm players by stripping realm suffixes.
+    
+    @param playerName string The player name to check
+    @return boolean True if player is in the same guild, false otherwise
+]]
 function Logic:IsPlayerInGuild(playerName)
     -- Check if player is in the same guild as the current player
     if not IsInGuild() then
@@ -549,19 +812,45 @@ function Logic:IsPlayerInGuild(playerName)
     return false
 end
 
--- Event handlers
+-- ============================================================================
+-- EVENT HANDLERS
+-- ============================================================================
+
+--[[
+    Handles ADDON_LOADED event
+    
+    Called when the addon is first loaded. Initializes the database
+    and displays a welcome message.
+    
+    @return void
+]]
 function Logic:OnAddonLoaded()
     self:InitializeDatabase()
     print(format(L["ADDON_LOADED"], ADDON_VERSION))
 end
 
+--[[
+    Handles PLAYER_ENTERING_WORLD event
+    
+    Called when the player enters the game world or reloads UI.
+    Updates the raid member list if player is in a group.
+    
+    @return void
+]]
 function Logic:OnPlayerEnteringWorld()
-    -- Check if in raid or group and update session
     if IsInRaid() or IsInGroup() then
         self:UpdateRaidMembers()
     end
 end
 
+--[[
+    Handles GROUP_ROSTER_UPDATE event
+    
+    Called whenever the group composition changes (members join/leave).
+    Updates the member list and refreshes the UI.
+    
+    @return void
+]]
 function Logic:OnGroupRosterUpdate()
     if IsInRaid() or IsInGroup() then
         self:UpdateRaidMembers()
@@ -584,6 +873,15 @@ function Logic:OnGroupRosterUpdate()
     end
 end
 
+--[[
+    Removes random players with zero penalties from season data
+    
+    Cleanup function that removes non-guild players who have accumulated
+    no penalties. Guild members are always retained regardless of penalty
+    amount. Called automatically when player leaves a group.
+    
+    @return void
+]]
 function Logic:CleanupSeasonDataRandomPlayers()
     -- Clean up season data by removing random players with 0 penalties
     -- Guild members are always kept regardless of penalty amount
