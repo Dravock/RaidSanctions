@@ -10,7 +10,13 @@
 ## X-License: MIT
 ## X-Embeds: None
 
-# Core Logic Layer
+# Core Logic Layer (Modular Architecture)
+modules\logic_utils.lua
+modules\logic_database.lua
+modules\logic_guild.lua
+modules\logic_session.lua
+modules\logic_penalty.lua
+modules\logic_season.lua
 logic.lua
 
 # UI Modules (Modular Architecture)

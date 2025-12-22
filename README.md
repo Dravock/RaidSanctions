@@ -108,22 +108,33 @@ cp -r RaidSanctions "World of Warcraft/_retail_/Interface/AddOns/"
 RaidSanctions/
 ├── RaidSanctions.lua           # Main entry point & event dispatcher
 ├── RaidSanctions.toc           # Addon manifest
-├── logic.lua                   # Core business logic
 ├── modules/
+│   ├── logic_utils.lua        # Utility functions (gold formatting, debug)
+│   ├── logic_database.lua     # Database operations & migrations
+│   ├── logic_guild.lua        # Guild membership checks
+│   ├── logic_session.lua      # Session management & player roster
+│   ├── logic_penalty.lua      # Penalty application & removal
+│   ├── logic_season.lua       # Season statistics tracking
 │   ├── ui_core.lua            # UI framework & window management
 │   ├── ui_playerlist.lua      # Player list rendering & interaction
 │   ├── ui_actions.lua         # Action panel & penalty buttons
 │   └── ui_sync.lua            # Real-time synchronization system
+├── logic.lua                   # Legacy compatibility layer
 ├── ui.lua                      # Legacy UI (deprecated, backward compat)
+├── LOGIC_MODULES.md            # Logic architecture documentation
 └── README.md                   # This file
 ```
 
 ### Design Patterns
 
 #### **Modular Architecture**
+- Logic layer: 6 focused modules (avg 116 lines each)
+- UI layer: 4 specialized modules (avg 324 lines each)
 - Each module has a single, well-defined responsibility
 - Loose coupling through namespace-based communication
 - High cohesion within modules
+
+**See [LOGIC_MODULES.md](LOGIC_MODULES.md) for detailed logic architecture documentation.**
 
 #### **Event-Driven Design**
 ```lua
@@ -134,7 +145,7 @@ eventFrame:SetScript("OnEvent", OnEvent)
 -- Route to appropriate handler
 function OnEvent(self, event, ...)
     if event == "GROUP_ROSTER_UPDATE" then
-        RaidSanctions.Logic:OnGroupRosterUpdate()
+        RaidSanctions.Session:UpdateMembers()
     end
 end
 ```
